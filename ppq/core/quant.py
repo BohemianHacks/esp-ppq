@@ -1,6 +1,4 @@
-"""PPQ Core Data Structure Abstraction PPQ 核心量化结构抽象.
-
-You are not allowed to modify this 请勿修改此文件
+"""PPQ Core Data Structure Abstraction PPQ.
 """
 
 import time  # for hash generation
@@ -348,15 +346,15 @@ class QuantizationStates(Enum):
         BAKED: means corresponding tensor has been pre-quantized, its value can directly
             go forward without quantization.
     """
-    INITIAL       = 1 # 量化参数刚刚被初始化，当前 config 不生效，数据不能被使用
-    ACTIVATED     = 4 # 表示当前 config 生效
-    BAKED         = 2 # 只针对参数量化，表示参数已经被静态量化，当前 config 不生效，数据可以直接使用
-    OVERLAPPED    = 3 # 表示这一路输入不量化，当前量化信息被父量化信息所覆盖
+    INITIAL       = 1 # Quantization parameters have just been initialized, the current config is not valid, and the data cannot be used
+    ACTIVATED     = 4 # Indicates that the current config is valid
+    BAKED         = 2 # Only for parameter quantization, indicating that the parameters have been statically quantized, the current config is not valid, and the data can be used directly
+    OVERLAPPED    = 3 # Indicates that this input is not quantized, and the current quantization information is overwritten by the parent quantization information
 
-    PASSIVE_INIT  = 6 # 表示这一路输入被动量化，并且刚刚初始化不能被使用
-    PASSIVE       = 5 # 表示这一路输入被动量化，如 bias, clip value 等，被动量化参数使用其他 TQC 的量化信息完成量化
-    PASSIVE_BAKED = 7 # 被动量化且静态量化，当前config不生效，数据可以直接使用
-    FP32          = 8 # 表示这一路输入不量化
+    PASSIVE_INIT  = 6 # Indicates that this input is passively quantized and has just been initialized and cannot be used
+    PASSIVE       = 5 # Indicates that this input is passively quantized, such as bias, clip value, etc., and the passive quantization parameters use the quantization information of other TQCs to complete the quantization
+    PASSIVE_BAKED = 7 # Passive quantization and static quantization, the current config is not valid, and the data can be used directly
+    FP32          = 8 # Indicates that this input is not quantized
     
     SOI           = -1 # Legacy State
     DEQUANTIZED   = -2 # Legacy State
@@ -374,153 +372,113 @@ class QuantizationStates(Enum):
 
 class TensorQuantizationConfig(Serializable):
     """
-## TensorQuantizationConfig(Tensor 量化控制结构体)
-PPQ 使用量化控制结构体描述量化行为，该结构体被定义在 ppq.core.quant 中。截止 PPQ 0.6.6 版本，该结构体由 15 项不同的属性组成。我们将向你介绍这一核心数据结构体的设计构想。
+## TensorQuantizationConfig (Tensor Quantization Control Structure)
+PPQ uses the quantization control structure to describe quantization behavior, which is defined in ppq.core.quant. As of PPQ 0.6.6, this structure consists of 15 different attributes. We will introduce you to the design concept of this core data structure.
 
-### 1. QuantizationPolicy 量化策略
-在 TensorQuantizationConfig 当中，首当其冲地内容是 TQC.policy，这是一个 QuantizationPolicy 对象。
-policy 属性用于描述量化的规则，一个完整的量化策略是由多个量化属性(QuantizationProperty)组合完成的；在 PPQ 中目前我们支持 8 种不同的量化属性，你可以使用以下属性来组合形成自定义的量化规则:
+### 1. QuantizationPolicy Quantization Policy
+In TensorQuantizationConfig, the first thing to be mentioned is TQC.policy, which is a QuantizationPolicy object.
+The policy attribute is used to describe the quantization rules. A complete quantization policy is composed of multiple quantization properties (QuantizationProperty); in PPQ, we currently support 8 different quantization properties. You can use the following properties to combine to form a custom quantization rule:
 
-1. PER_TENSOR: 以 Tensor 为单位完成量化，每个 Tensor 使用一个 scale 和 offset 信息。
+1. PER_TENSOR: Quantization is completed in units of Tensor, and each Tensor uses a scale and offset information.
 
-2. PER_CHANNEL: 以 Channel 为单位完成量化，每个 Channel 使用一个 scale 和 offset 信息。
+2. PER_CHANNEL: Quantization is performed in units of channels, and each channel uses a scale and offset information.
 
-3. LINEAR: 线性量化，通常的 INT8, INT16 皆属于线性量化，在线性量化的表示中不存在指数位。
+3. LINEAR: Linear quantization. Common INT8 and INT16 are both linear quantization. There is no exponent bit in the representation of linear quantization.
 
-4. FLOATING: 浮点量化，包括 FP8 E4M3, FP8 E5M2, FP16, BF16 等格式，在浮点量化中数据由底数和指数两部分组成。
+4. FLOATING: Floating-point quantization, including FP8 E4M3, FP8 E5M2, FP16, BF16 and other formats. In floating-point quantization, the data consists of a base and an exponent.
 
-5. SYMMETRICAL: 对称量化，在量化计算中不启用 offset。
+5. SYMMETRICAL: Symmetric quantization. Offset is not enabled in quantization calculation.
 
-6. ASYMMETRICAL: 非对称量化，在量化计算中启用 offset 完成量化偏移。
+6. ASYMMETRICAL: Asymmetric quantization. Offset is enabled in quantization calculation to complete quantization offset.
 
-7. POWER_OF_2: 限制 scale 取值必须为 2 的整数次幂，这一量化行为多见于端侧以及浮点量化。
+7. POWER_OF_2: The scale value must be an integer power of 2. This quantization behavior is more common on the end side and floating-point quantization.
 
-8. DYNAMIC: 启用动态量化策略，对于每一批次的数据，scale 与 offset 都将被动态地计算更新。
+8. DYNAMIC: Enable dynamic quantization strategy. For each batch of data, scale and offset will be dynamically calculated and updated.
 
-下图解释了浮点量化与线性量化的区别：
+The following figure explains the difference between floating point quantization and linear quantization:
 
 ![image](https://user-images.githubusercontent.com/43309460/199235366-1e83ed97-0731-4e1d-abeb-b7121e3d2a94.png)
 
-### 2. 线性量化与相关属性
+### 2. Linear quantization and related properties
 
-线性量化允许与下列属性进行组合：
+Linear quantization allows the following properties to be combined:
 
-    QuantizationProperty.ASYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_CHANNEL,
-    QuantizationProperty.ASYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_TENSOR,
-    QuantizationProperty.SYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_CHANNEL,
-    QuantizationProperty.SYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_TENSOR,
-    QuantizationProperty.ASYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_TENSOR | QuantizationProperty.POWER_OF_2,
-    QuantizationProperty.SYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_TENSOR | QuantizationProperty.POWER_OF_2,
-    QuantizationProperty.ASYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_CHANNEL | QuantizationProperty.POWER_OF_2,
-    QuantizationProperty.SYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_CHANNEL | QuantizationProperty.POWER_OF_2,
+QuantizationProperty.ASYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_CHANNEL,
+QuantizationProperty.ASYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_TENSOR,
+QuantizationProperty.SYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_CHANNEL,
+QuantizationProperty.SYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_TENSOR, QuantizationProperty.ASYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_TENSOR | QuantizationProperty.POWER_OF_2, QuantizationProperty.SYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_TENSOR | QuantizationProperty.POWER_OF_2, QuantizationProperty.ASYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_CHANNEL | QuantizationProperty.POWER_OF_2, QuantizationProperty.SYMMETRICAL | QuantizationProperty.LINEAR | QuantizationProperty.PER_CHANNEL | QuantizationProperty.POWER_OF_2,
 
-线性量化是最为常用的数值量化方法，有些时候我们也称其为均匀量化，在线性量化中，量化操作的计算方法为：
+Linear quantization is the most commonly used numerical quantization method. Sometimes we also call it uniform quantization. In linear quantization, the calculation method of the quantization operation is:
 
 - Unscaled FP32 = (FP32 / scale) - offset
 - INT8 = Clip(Round(Unscale FP32), quant_min, quant_max)
 - Dequantized FP32 = (INT8 + offset) * scale
 
-其中 Round 函数行为由 TQC.rounding(RoundingPolicy) 属性确定，PPQ 支持 7 种不同的取整策略，其中 ROUND_HALF_EVEN 是最常见的取整策略，关于取整策略的详细讨论可以参考 https://en.wikipedia.org/wiki/Rounding
+The behavior of the Round function is determined by the TQC.rounding(RoundingPolicy) property. PPQ supports 7 different rounding policies, among which ROUND_HALF_EVEN is the most common rounding policy. For a detailed discussion of rounding policies, please refer to https://en.wikipedia.org/wiki/Rounding
 
-quant_min, quant_max 分别由 TQC.quant_min, TQC.quant_max 属性确定，对于线性量化而言他们是整数，通常为[-128, 127]。部分框架使用 [-127, 127] 作为截断值，在部分场景下如此定义将有优势，但在 Onnx 的 Q/DQ 算子定义中不允许使用 [-127, 127] 作为截断。
+quant_min, quant_max are determined by the TQC.quant_min, TQC.quant_max properties respectively. For linear quantization, they are integers, usually [-128, 127]. Some frameworks use [-127, 127] as the cutoff value, which is advantageous in some scenarios, but [-127, 127] is not allowed to be used as the cutoff value in the Q/DQ operator definition of Onnx.
 
-PPQ 可以模拟 1-32 bit 的任意位宽量化，但若以部署为目的，不建议使用 8 bit 之外的配置。用户须知高位宽量化可能造成 Scale 过小，以至于浮点下溢出。
+PPQ can simulate any bit width quantization of 1-32 bits, but for deployment purposes, it is not recommended to use a configuration other than 8 bits. Users should be aware that high bit width quantization may cause the scale to be too small, resulting in floating point underflow.
 
-### 3. 浮点量化与相关属性
+### 3. Floating point quantization and related properties
 
-浮点量化允许与下列属性进行组合：
+Floating point quantization allows the following properties to be combined:
 
-    QuantizationProperty.SYMMETRICAL | QuantizationProperty.FLOATING | QuantizationProperty.PER_CHANNEL | QuantizationProperty.POWER_OF_2,
-    QuantizationProperty.SYMMETRICAL | QuantizationProperty.FLOATING | QuantizationProperty.PER_TENSOR | QuantizationProperty.POWER_OF_2,
+QuantizationProperty.SYMMETRICAL | QuantizationProperty.FLOATING | QuantizationProperty.PER_CHANNEL | QuantizationProperty.POWER_OF_2,
 
-在浮点量化中，量化函数的计算方法为：
+QuantizationProperty.SYMMETRICAL | QuantizationProperty.FLOATING | QuantizationProperty.PER_TENSOR | QuantizationProperty.POWER_OF_2,
+
+In floating point quantization, the calculation method of the quantization function is:
 
 - Unscaled FP32 = (FP32 / scale)
+
 - FP8 = Convert(Unscale FP32, quant_min, quant_max)
+
 - Dequantized FP32 = FP8 * scale
 
-其中 Convert 函数行为复杂，其转换过程分为三种不同的情况：
-- 当 Unscaled FP32 大于 quant_max，或者小于 quant_min，则直接进行截断
-- 当 Unscaled FP32 幅值大于 FP8 能够表达的最小值，此时需要移去多余的底数位，并对底数进行四舍五入
-- 当 Unscaled FP32 数据小于规范化 FP8 能够表达的最小值，此时浮点下溢出，此时我们计算 FP8 = Round(Unscaled FP32 / FP8_min) * FP8_min
+The Convert function has complex behavior, and its conversion process is divided into three different cases:
 
-其中 FP8_min 是非规格化 FP8 能够表达的最小值。对于 FP8 E4M3 标准而言，其能表示的最大值为 448.0，最小值为 -448.0。
+- When Unscaled FP32 is greater than quant_max, or less than quant_min, truncation is performed directly
+- When the Unscaled FP32 amplitude is greater than the minimum value that FP8 can express, the extra base bits need to be removed and the base needs to be rounded
+- When the Unscaled FP32 data is less than the minimum value that normalized FP8 can express, the floating point overflows. At this time, we calculate FP8 = Round(Unscaled FP32 / FP8_min) * FP8_min
 
-quant_min, quant_max 分别由 TQC.quant_min, TQC.quant_max 属性确定，对于 FLOATING 量化，我们引入一个新的属性 TQC.exponent_bits(int)。使用这个属性来指定总位宽中有多少数位用于表示指数(相应地，底数位为总位宽-指数位-1)。
+FP8_min is the minimum value that unnormalized FP8 can express. For the FP8 E4M3 standard, the maximum value that can be expressed is 448.0 and the minimum value is -448.0.
 
-在浮点量化中，尺度因子的选取对量化效果的影响不大，因此用户可以使用 constant 校准策略(见 ppq.quantization.observer)将所有尺度因子设置为1。
+quant_min, quant_max are determined by the TQC.quant_min, TQC.quant_max attributes respectively. For FLOATING quantization, we introduce a new attribute TQC.exponent_bits(int). Use this property to specify how many bits of the total bit width are used to represent the exponent (correspondingly, the base bits are the total bit width-exponent bits-1).
 
-关于浮点量化的具体细节可以参考 [本文](https://zhuanlan.zhihu.com/p/574825662)
+In floating-point quantization, the selection of scale factors has little effect on the quantization effect, so users can use the constant calibration strategy (see ppq.quantization.observer) to set all scale factors to 1.
 
-### 4. 其他量化控制属性
+For specific details about floating-point quantization, please refer to [this article](https://zhuanlan.zhihu.com/p/574825662)
 
-1. TQC.num_of_bits(int)：量化位宽，对于 INT8, FP8 量化，量化位宽为 8。对于 INT16, FP16 量化，量化位宽为16。
+### 4. Other quantization control properties
 
-2. TQC.state(QuantizationStates): 量化状态，在 PPQ 中目前有共计 8 种不同的量化状态，该属性极大地丰富了 PPQ 量化信息的语义，使得我们能够更加灵活地控制量化行为。该属性可以被用于切换 量化 / 非量化 状态；执行量化联合定点；执行参数烘焙。
+1. TQC.num_of_bits(int): quantization bit width, for INT8, FP8 quantization, the quantization bit width is 8. For INT16, FP16 quantization, the quantization bit width is 16.
 
-3. TQC.channel_axis(int): 量化轴，对于 PER_CHANNEL 量化，使用这个属性来指定沿着那一维度展开量化，如执行 Per-tensor 量化，该属性被忽略，用户可以将其设置为 None。
+2. TQC.state(QuantizationStates): quantization state. There are currently 8 different quantization states in PPQ. This property greatly enriches the semantics of PPQ quantization information, allowing us to control quantization behavior more flexibly. This attribute can be used to switch the quantization/unquantization state; perform quantization joint fixed point; perform parameter baking.
 
-4. TQC.observer_algorithm(str): observer 算法，其中 observer 是用于确定 scale 和 offset 的对象，使用这个属性指明要使用何种类型的 observer 确定 scale 和 offset
+3. TQC.channel_axis(int): quantization axis. For PER_CHANNEL quantization, use this attribute to specify along which dimension to expand the quantization. If Per-tensor quantization is performed, this attribute is ignored and the user can set it to None.
 
-5. TQC.dominator(TensorQuantizationConfig): 一个指向父量化信息的指针。在 PPQ 中 TQC 与 TQC 之间并不是独立的，他们之间可以存在父子关系。所有子量化信息与父量化信息共享 scale 和 offset
+4. TQC.observer_algorithm(str): observer algorithm, where observer is an object used to determine scale and offset. Use this attribute to specify what type of observer to use to determine scale and offset.
 
-6. TQC.visiblity(QuantizationVisibility): 导出可见性，使用这个属性来告知 ppq 的导出器是否需要导出当前的 TQC。
+5. TQC.dominator(TensorQuantizationConfig): A pointer to the parent quantization information. In PPQ, TQC and TQC are not independent, and there can be a parent-child relationship between them. All child quantization information shares scale and offset with parent quantization information
 
-### 5. 量化控制结构体的初始化
+6. TQC.visiblity(QuantizationVisibility): Export visibility. Use this property to tell the ppq exporter whether to export the current TQC.
 
-TensorQuantizationConfig 是 PPQ 中的核心数据结构，它总是由 Quantizer 对象完成创建的：
+### 5. Initialization of quantization control structure
 
-    # 下面这段代码为一个指定的算子创建了相应的 Tensor Quantization Config
-    quantizer = PFL.Quantizer(platform=TargetPlatform.TRT_FP8, graph=graph) # 取得 TRT_FP8 所对应的量化器
-    quantizer.quantize_operation(op_name = op.name, platform = dispatching[op.name])
+TensorQuantizationConfig is the core data structure in PPQ. It is always created by Quantizer object:
 
-在 PPQ 当中，Quantizer 的职责即是为算子初始化他们的量化控制结构体。不同的量化器将按照不同的规则创建控制结构体，如 TRT_FP8 所对应的量化器 只会为了 Conv, Gemm 算子创建量化信息，要求他们的输入按照对称-浮点-Per Channel的方式完成量化。而 DSP_INT8 所对应的量化器为几乎所有算子创建量化信息，要求他们按照非对称-线性-Per Tensor的方式完成量化。
+# The following code creates the corresponding Tensor Quantization Config for a specified operator
+quantizer = PFL.Quantizer(platform=TargetPlatform.TRT_FP8, graph=graph) # Get the quantizer corresponding to TRT_FP8
+quantizer.quantize_operation(op_name = op.name, platform = dispatching[op.name])
 
-用户可以手动创建量化控制结构体，使用 ppq.lib 中的接口：
+In PPQ, the responsibility of Quantizer is to initialize their quantization control structure for operators. Different quantizers will create control structures according to different rules. For example, the quantizer corresponding to TRT_FP8 will only create quantization information for Conv and Gemm operators, requiring their inputs to be quantized in a symmetric-floating-point-per-channel manner. The quantizer corresponding to DSP_INT8 creates quantization information for almost all operators, requiring them to be quantized in an asymmetric-linear-per-tensor manner.
 
-    # 创建一个默认的线性量化控制结构体(对称, per-tensor)
-    from ppq.lib import LinearQuantizationConfig
-    TQC = LinearQuantizationConfig()
+Users can manually create quantization control structures using the interface in ppq.lib:
 
-    # 创建一个默认的浮点量化控制结构体(FP8 E4M3)
-    from ppq.lib import FloatingQuantizationConfig
-    TQC = FloatingQuantizationConfig()
+# Create a default linear quantization control structure (symmetric, per-tensor)
 
-### 6. 量化控制结构体的校准
-
-绝大部分的 TensorQuantizationConfig 在完成初始化之后都无法使用-他们的 scale 与 offset 均为空值，且 Quantizer 在初始化他们时会将其状态(TQC.state)置为 INITIAL，处于这个状态的量化信息在计算过程中不会被启用。
-
-我们必须送入一定量数据，进行必要 Calibration 操作后才能为网络中的量化信息确定合理的 scale 与 offset 值，这一过程是由种类繁多的 Observer 完成的：
-
-    # PPQ 目前支持 8 种不同的 Observer
-    OBSERVER_TABLE = {
-        'minmax': TorchMinMaxObserver,
-        'kl': TorchHistObserver,
-        'percentile': TorchPercentileObserver,
-        'mse': TorchMSEObserver,
-        'isotone': TorchIsotoneObserver,
-        'constant': ConstantObserver,
-        'floating': DirectMSEObserver,
-        'isotone': ...
-    }
-
-这些 Observer 会负责在网络计算过程中收集必要的统计信息，并为 TQC 的 scale 与 offset 赋予有效的值。在完成一切之后，Observer 还会负责将 TQC 的状态(TQC.state)修改为 ACTIVED。此时量化信息将被正式启用，从而在网络前向传播模拟量化计算。
-
-关于 Observer 的讨论，可以参考 [本视频](https://www.bilibili.com/video/BV1QF41157aM)
-
-### 7. 量化控制结构体的父子链接
-
-在我们讨论量化时，对于那些存在着多个输入的算子，例如 add, concat，它们的所有输入总是被要求有着相同的 scale。为了表述这种语义，我们为 TQC 添加了 TQC.dominator 属性，这一属性可以指向另一个量化控制结构体。
-
-假设我们存在两个不同的量化控制结构体 A, B：
-
-- 语句 A.dominator = B 表示 A 将共享 B 的 scale 与 offset(A.policy, A.num_of_bits等属性仍将使用自己的)。于此同时 A.state 将被修改为 OVERLAPPED(A 将不再启用)
-- 语句 A.master = B 表示 A 将共享 B 的 scale 与 offset(A.policy, A.num_of_bits等属性仍将使用自己的)。于此同时 A.state 将被修改为 PASSIVE(A 将仍然启用，但不具有独立的量化参数)
-
-如果 A 已经是其他量化结构体 C 的父节点，则上述过程将级联地使得 B 成为 A, C 共同的父节点，A, C 都将共享 B 的 scale 与 offset。
-
-下图简述了在量化控制结构体的生命周期中，量化状态是如何变迁的（[量化优化过程](https://github.com/openppl-public/ppq/tree/master/ppq/quantization/optim)将负责修改量化控制信息的状态）：
-
+from ppq.lib import LinearQuantiz
 ![Quantization State](https://user-images.githubusercontent.com/43309460/199236632-ec69ca29-9900-4875-8299-a196546d0dde.png)
     """
     def __init__(
